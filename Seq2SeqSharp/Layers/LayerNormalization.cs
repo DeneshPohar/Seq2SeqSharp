@@ -12,17 +12,16 @@ namespace Seq2SeqSharp
         private readonly IWeightTensor m_beta;
         private readonly string m_name;
 
-        public LayerNormalization(string name, int dim, int deviceId)
+        public LayerNormalization(string name, int dim, int deviceId, bool isTrainable)
         {
             m_name = name;
-            m_alpha = new WeightTensor(new long[2] { 1, dim }, 1, deviceId, name: $"{name}.{nameof(m_alpha)}", isTrainable: true);
-            m_beta = new WeightTensor(new long[2] { 1, dim }, 0, deviceId, name: $"{name}.{nameof(m_beta)}", isTrainable: true);
+            m_alpha = new WeightTensor(new long[2] { 1, dim }, 1, deviceId, name: $"{name}.{nameof(m_alpha)}", isTrainable: isTrainable);
+            m_beta = new WeightTensor(new long[2] { 1, dim }, 0, deviceId, name: $"{name}.{nameof(m_beta)}", isTrainable: isTrainable);
         }
 
         public IWeightTensor Norm(IWeightTensor input, IComputeGraph g)
         {
-            IComputeGraph innerGraph = g.CreateSubGraph(m_name);
-            return innerGraph.LayerNorm(input, m_alpha, m_beta);
+            return g.LayerNorm(input, m_alpha, m_beta);
         }
 
         /// <summary>
@@ -34,8 +33,7 @@ namespace Seq2SeqSharp
         /// <returns></returns>
         public IWeightTensor AddNorm(IWeightTensor input1, IWeightTensor input2, IComputeGraph g)
         {
-            IComputeGraph innerGraph = g.CreateSubGraph(m_name);
-            return innerGraph.AddLayerNorm(input1, input2, m_alpha, m_beta);
+            return g.AddLayerNorm(input1, input2, m_alpha, m_beta);
         }
 
         public virtual List<IWeightTensor> getParams()

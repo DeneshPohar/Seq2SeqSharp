@@ -3,6 +3,7 @@ using Seq2SeqSharp.Tools;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.Remoting.Contexts;
 using System.Threading;
 
 namespace Seq2SeqSharp
@@ -10,9 +11,10 @@ namespace Seq2SeqSharp
 
     public class AttentionPreProcessResult
     {
+        public int[] sourceIdxs;
         public IWeightTensor rawInputs;
         public IWeightTensor uhs;
-        public IWeightTensor inputs;
+        public IWeightTensor inputsBatchFirst;
 
     }
 
@@ -29,33 +31,37 @@ namespace Seq2SeqSharp
         private readonly int m_hiddenDim;
         private readonly int m_contextDim;
         private readonly int m_deviceId;
+        private readonly bool m_isTrainable;
 
         private bool m_enableCoverageModel;
         private readonly IWeightTensor m_Wc;
         private readonly IWeightTensor m_bWc;
         private readonly LSTMCell m_coverage;
 
-        public AttentionUnit(string name, int hiddenDim, int contextDim, int deviceId, bool enableCoverageModel)
+        private readonly int k_coverageModelDim = 16;
+
+        public AttentionUnit(string name, int hiddenDim, int contextDim, int deviceId, bool enableCoverageModel, bool isTrainable)
         {
             m_name = name;
             m_hiddenDim = hiddenDim;
             m_contextDim = contextDim;
             m_deviceId = deviceId;
             m_enableCoverageModel = enableCoverageModel;
+            m_isTrainable = isTrainable;
 
-            Logger.WriteLine($"Creating attention unit '{name}' HiddenDim = '{hiddenDim}', ContextDim = '{contextDim}', DeviceId = '{deviceId}'");
+            Logger.WriteLine($"Creating attention unit '{name}' HiddenDim = '{hiddenDim}', ContextDim = '{contextDim}', DeviceId = '{deviceId}', EnableCoverageModel = '{enableCoverageModel}'");
 
-            m_Ua = new WeightTensor(new long[2] { contextDim, hiddenDim }, deviceId, normal: true, name: $"{name}.{nameof(m_Ua)}", isTrainable: true);
-            m_Wa = new WeightTensor(new long[2] { hiddenDim, hiddenDim }, deviceId, normal: true, name: $"{name}.{nameof(m_Wa)}", isTrainable: true);
-            m_bUa = new WeightTensor(new long[2] { 1, hiddenDim }, 0, deviceId, name: $"{name}.{nameof(m_bUa)}", isTrainable: true);
-            m_bWa = new WeightTensor(new long[2] { 1, hiddenDim }, 0, deviceId, name: $"{name}.{nameof(m_bWa)}", isTrainable: true);
-            m_V = new WeightTensor(new long[2] { hiddenDim, 1 }, deviceId, normal: true, name: $"{name}.{nameof(m_V)}", isTrainable: true);
+            m_Ua = new WeightTensor(new long[2] { contextDim, hiddenDim }, deviceId, normal: true, name: $"{name}.{nameof(m_Ua)}", isTrainable: isTrainable);
+            m_Wa = new WeightTensor(new long[2] { hiddenDim, hiddenDim }, deviceId, normal: true, name: $"{name}.{nameof(m_Wa)}", isTrainable: isTrainable);
+            m_bUa = new WeightTensor(new long[2] { 1, hiddenDim }, 0, deviceId, name: $"{name}.{nameof(m_bUa)}", isTrainable: isTrainable);
+            m_bWa = new WeightTensor(new long[2] { 1, hiddenDim }, 0, deviceId, name: $"{name}.{nameof(m_bWa)}", isTrainable: isTrainable);
+            m_V = new WeightTensor(new long[2] { hiddenDim, 1 }, deviceId, normal: true, name: $"{name}.{nameof(m_V)}", isTrainable: isTrainable);
 
             if (m_enableCoverageModel)
             {
-                m_Wc = new WeightTensor(new long[2] { 16, hiddenDim }, deviceId, normal: true, name: $"{name}.{nameof(m_Wc)}", isTrainable: true);
-                m_bWc = new WeightTensor(new long[2] { 1, hiddenDim }, 0, deviceId, name: $"{name}.{nameof(m_bWc)}", isTrainable: true);
-                m_coverage = new LSTMCell(name: $"{name}.{nameof(m_coverage)}", hdim: 16, dim: 1 + contextDim + hiddenDim, deviceId: deviceId);
+                m_Wc = new WeightTensor(new long[2] { k_coverageModelDim, hiddenDim }, deviceId, normal: true, name: $"{name}.{nameof(m_Wc)}", isTrainable: isTrainable);
+                m_bWc = new WeightTensor(new long[2] { 1, hiddenDim }, 0, deviceId, name: $"{name}.{nameof(m_bWc)}", isTrainable: isTrainable);
+                m_coverage = new LSTMCell(name: $"{name}.{nameof(m_coverage)}", hdim: k_coverageModelDim, dim: 1 + contextDim + hiddenDim, deviceId: deviceId, isTrainable: isTrainable);
             }
         }
 
@@ -64,19 +70,23 @@ namespace Seq2SeqSharp
             return m_deviceId;
         }
 
-        public AttentionPreProcessResult PreProcess(IWeightTensor inputs, int batchSize, IComputeGraph graph)
+        public AttentionPreProcessResult PreProcess(IWeightTensor inputs, int batchSize, IComputeGraph g)
         {
-            IComputeGraph g = graph.CreateSubGraph(m_name + "_PreProcess");
+            int srcSeqLen = inputs.Rows / batchSize;
+
             AttentionPreProcessResult r = new AttentionPreProcessResult
             {
                 rawInputs = inputs,
-                uhs = g.Affine(inputs, m_Ua, m_bUa),
-                inputs = g.TransposeBatch(inputs, batchSize)
+                inputsBatchFirst = g.TransposeBatch(inputs, batchSize)
             };
+
+            r.uhs = g.Affine(r.inputsBatchFirst, m_Ua, m_bUa);
+            r.uhs = g.View(r.uhs, batchSize, srcSeqLen, -1);
+
 
             if (m_enableCoverageModel)
             {
-                m_coverage.Reset(graph.GetWeightFactory(), r.inputs.Rows);
+                m_coverage.Reset(g.GetWeightFactory(), r.inputsBatchFirst.Rows);
             }
 
             return r;
@@ -84,43 +94,62 @@ namespace Seq2SeqSharp
 
         public IWeightTensor Perform(IWeightTensor state, AttentionPreProcessResult attenPreProcessResult, int batchSize, IComputeGraph graph)
         {
-            IComputeGraph g = graph.CreateSubGraph(m_name);
+            int srcSeqLen = attenPreProcessResult.inputsBatchFirst.Rows / batchSize;
 
-            IWeightTensor wc = g.Affine(state, m_Wa, m_bWa);
-            IWeightTensor wcs = g.RepeatRows(wc, attenPreProcessResult.inputs.Rows / batchSize);
-            IWeightTensor wcSum = wcs;
-
-            if (m_enableCoverageModel)
+            using (IComputeGraph g = graph.CreateSubGraph(m_name))
             {
-                IWeightTensor wCoverage = g.Affine(m_coverage.Hidden, m_Wc, m_bWc);
-                wcSum = g.Add(wcs, wCoverage);
+                // Affine decoder state
+                IWeightTensor wc = g.Affine(state, m_Wa, m_bWa);
+
+                // Expand dims from [batchSize x decoder_dim] to [batchSize x srcSeqLen x decoder_dim]
+                IWeightTensor wc1 = g.View(wc, batchSize, 1, wc.Columns);
+                IWeightTensor wcExp = g.Expand(wc1, batchSize, srcSeqLen, wc.Columns);
+
+                IWeightTensor ggs = null;
+                if (m_enableCoverageModel)
+                {
+                    // Get coverage model status at {t-1}
+                    IWeightTensor wCoverage = g.Affine(m_coverage.Hidden, m_Wc, m_bWc);
+                    IWeightTensor wCoverage1 = g.View(wCoverage, batchSize, srcSeqLen, -1);
+
+                    ggs = g.AddTanh(attenPreProcessResult.uhs, wcExp, wCoverage1);
+                }
+                else
+                {
+                    ggs = g.AddTanh(attenPreProcessResult.uhs, wcExp);
+                }
+
+                IWeightTensor ggss = g.View(ggs, batchSize * srcSeqLen, -1);
+                IWeightTensor atten = g.Mul(ggss, m_V);
+
+                IWeightTensor attenT = g.Transpose(atten);
+                IWeightTensor attenT2 = g.View(attenT, batchSize, srcSeqLen);
+
+                IWeightTensor attenSoftmax1 = g.Softmax(attenT2, inPlace: true);
+
+                IWeightTensor attenSoftmax = g.View(attenSoftmax1, batchSize, 1, srcSeqLen);
+                IWeightTensor inputs2 = g.View(attenPreProcessResult.inputsBatchFirst, batchSize, srcSeqLen, attenPreProcessResult.inputsBatchFirst.Columns);
+
+                IWeightTensor contexts = graph.MulBatch(attenSoftmax, inputs2, batchSize);
+
+                if (m_enableCoverageModel)
+                {
+                    // Concatenate tensor as input for coverage model
+                    IWeightTensor aCoverage = g.View(attenSoftmax1, attenPreProcessResult.inputsBatchFirst.Rows, 1);
+
+
+                    IWeightTensor state2 = g.View(state, batchSize, 1, state.Columns);
+                    IWeightTensor state3 = g.Expand(state2, batchSize, srcSeqLen, state.Columns);
+                    IWeightTensor state4 = g.View(state3, batchSize * srcSeqLen, -1);
+
+
+                    IWeightTensor concate = g.ConcatColumns(aCoverage, attenPreProcessResult.inputsBatchFirst, state4);
+                    m_coverage.Step(concate, graph);
+                }
+
+
+                return contexts;
             }
-
-            IWeightTensor ggs = g.AddTanh(attenPreProcessResult.uhs, wcSum);
-            IWeightTensor atten = g.Mul(ggs, m_V);
-
-            IWeightTensor atten2 = g.TransposeBatch(atten, batchSize);
-            IWeightTensor attenT = g.Transpose(atten2);
-            IWeightTensor attenT2 = g.View(attenT, batchSize, attenPreProcessResult.inputs.Rows / batchSize);
-
-            IWeightTensor attenSoftmax1 = g.Softmax(attenT2, inPlace: true);
-
-            IWeightTensor attenSoftmax = g.View(attenSoftmax1, batchSize, attenSoftmax1.Rows / batchSize, attenSoftmax1.Columns);
-            IWeightTensor inputs2 = g.View(attenPreProcessResult.inputs, batchSize, attenPreProcessResult.inputs.Rows / batchSize, attenPreProcessResult.inputs.Columns);
-
-            IWeightTensor contexts = g.MulBatch(attenSoftmax, inputs2, batchSize);
-
-            if (m_enableCoverageModel)
-            {
-                // Concatenate tensor as input for coverage model
-                IWeightTensor aCoverage = g.View(attenSoftmax1, attenPreProcessResult.inputs.Rows, 1);
-                IWeightTensor aCoverage2 = g.TransposeBatch(aCoverage, attenPreProcessResult.inputs.Rows / batchSize);
-                IWeightTensor sCoverage = g.RepeatRows(state, attenPreProcessResult.inputs.Rows / batchSize);
-                IWeightTensor concate = g.ConcatColumns(aCoverage2, attenPreProcessResult.rawInputs, sCoverage);
-                m_coverage.Step(concate, graph);
-            }
-
-            return contexts;
         }
 
 
@@ -180,7 +209,7 @@ namespace Seq2SeqSharp
 
         public INeuralUnit CloneToDeviceAt(int deviceId)
         {
-            AttentionUnit a = new AttentionUnit(m_name, m_hiddenDim, m_contextDim, deviceId, m_enableCoverageModel);
+            AttentionUnit a = new AttentionUnit(m_name, m_hiddenDim, m_contextDim, deviceId, m_enableCoverageModel, m_isTrainable);
             return a;
         }
     }

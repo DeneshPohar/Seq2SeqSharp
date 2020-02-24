@@ -21,7 +21,7 @@ namespace Seq2SeqSharp
         private readonly LayerNormalization m_layerNorm1;
         private readonly LayerNormalization m_layerNorm2;
 
-        public LSTMAttentionDecoderCell(string name, int hiddenDim, int inputDim, int contextDim, int deviceId)
+        public LSTMAttentionDecoderCell(string name, int hiddenDim, int inputDim, int contextDim, int deviceId, bool isTrainable)
         {
             m_name = name;
             m_hiddenDim = hiddenDim;
@@ -30,11 +30,11 @@ namespace Seq2SeqSharp
 
             Logger.WriteLine($"Create LSTM attention decoder cell '{name}' HiddemDim = '{hiddenDim}', InputDim = '{inputDim}', ContextDim = '{contextDim}', DeviceId = '{deviceId}'");
 
-            m_Wxhc = new WeightTensor(new long[2] { inputDim + hiddenDim + contextDim, hiddenDim * 4 }, deviceId, normal: true, name: $"{name}.{nameof(m_Wxhc)}", isTrainable: true);
-            m_b = new WeightTensor(new long[2] { 1, hiddenDim * 4 }, 0, deviceId, name: $"{name}.{nameof(m_b)}", isTrainable: true);
+            m_Wxhc = new WeightTensor(new long[2] { inputDim + hiddenDim + contextDim, hiddenDim * 4 }, deviceId, normal: true, name: $"{name}.{nameof(m_Wxhc)}", isTrainable: isTrainable);
+            m_b = new WeightTensor(new long[2] { 1, hiddenDim * 4 }, 0, deviceId, name: $"{name}.{nameof(m_b)}", isTrainable: isTrainable);
 
-            m_layerNorm1 = new LayerNormalization($"{name}.{nameof(m_layerNorm1)}", hiddenDim * 4, deviceId);
-            m_layerNorm2 = new LayerNormalization($"{name}.{nameof(m_layerNorm2)}", hiddenDim, deviceId);
+            m_layerNorm1 = new LayerNormalization($"{name}.{nameof(m_layerNorm1)}", hiddenDim * 4, deviceId, isTrainable);
+            m_layerNorm2 = new LayerNormalization($"{name}.{nameof(m_layerNorm2)}", hiddenDim, deviceId, isTrainable);
         }
 
         /// <summary>
@@ -46,28 +46,30 @@ namespace Seq2SeqSharp
         /// <returns>Update hidden weights</returns>
         public IWeightTensor Step(IWeightTensor context, IWeightTensor input, IComputeGraph g)
         {
-            IComputeGraph computeGraph = g.CreateSubGraph(m_name);
+            using (IComputeGraph computeGraph = g.CreateSubGraph(m_name))
+            {
+                IWeightTensor cell_prev = Cell;
+                IWeightTensor hidden_prev = Hidden;
 
-            IWeightTensor cell_prev = Cell;
-            IWeightTensor hidden_prev = Hidden;
+                IWeightTensor hxhc = computeGraph.ConcatColumns(input, hidden_prev, context);
+                IWeightTensor hhSum = computeGraph.Affine(hxhc, m_Wxhc, m_b);
+                IWeightTensor hhSum2 = m_layerNorm1.Norm(hhSum, computeGraph);
 
-            IWeightTensor hxhc = computeGraph.ConcatColumns(input, hidden_prev, context);
-            IWeightTensor hhSum = computeGraph.Affine(hxhc, m_Wxhc, m_b);
-            IWeightTensor hhSum2 = m_layerNorm1.Norm(hhSum, computeGraph);
+                (IWeightTensor gates_raw, IWeightTensor cell_write_raw) = computeGraph.SplitColumns(hhSum2, m_hiddenDim * 3, m_hiddenDim);
+                IWeightTensor gates = computeGraph.Sigmoid(gates_raw);
+                IWeightTensor cell_write = computeGraph.Tanh(cell_write_raw);
 
-            (IWeightTensor gates_raw, IWeightTensor cell_write_raw) = computeGraph.SplitColumns(hhSum2, m_hiddenDim * 3, m_hiddenDim);
-            IWeightTensor gates = computeGraph.Sigmoid(gates_raw);
-            IWeightTensor cell_write = computeGraph.Tanh(cell_write_raw);
+                (IWeightTensor input_gate, IWeightTensor forget_gate, IWeightTensor output_gate) = computeGraph.SplitColumns(gates, m_hiddenDim, m_hiddenDim, m_hiddenDim);
 
-            (IWeightTensor input_gate, IWeightTensor forget_gate, IWeightTensor output_gate) = computeGraph.SplitColumns(gates, m_hiddenDim, m_hiddenDim, m_hiddenDim);
+                // compute new cell activation: ct = forget_gate * cell_prev + input_gate * cell_write
+                Cell = g.EltMulMulAdd(forget_gate, cell_prev, input_gate, cell_write);
+                IWeightTensor ct2 = m_layerNorm2.Norm(Cell, computeGraph);
 
-            // compute new cell activation: ct = forget_gate * cell_prev + input_gate * cell_write
-            Cell = computeGraph.EltMulMulAdd(forget_gate, cell_prev, input_gate, cell_write);
-            IWeightTensor ct2 = m_layerNorm2.Norm(Cell, computeGraph);
+                Hidden = g.EltMul(output_gate, computeGraph.Tanh(ct2));
 
-            Hidden = computeGraph.EltMul(output_gate, computeGraph.Tanh(ct2));
 
-            return Hidden;
+                return Hidden;
+            }
         }
 
         public List<IWeightTensor> getParams()
