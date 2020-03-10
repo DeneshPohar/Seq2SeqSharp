@@ -10,7 +10,7 @@ namespace Seq2SeqSharp
 
 
     [Serializable]
-    public class AttentionDecoder : INeuralUnit
+    public class AttentionDecoder : IDecoder
     {
         private readonly List<LSTMAttentionDecoderCell> m_decoders = new List<LSTMAttentionDecoderCell>();
         private readonly FeedForwardLayer m_decoderFFLayer;
@@ -70,9 +70,9 @@ namespace Seq2SeqSharp
             }
         }
 
-        public AttentionPreProcessResult PreProcess(IWeightTensor encoderOutput, int batchSize, IComputeGraph g)
+        public AttentionPreProcessResult PreProcess(IWeightTensor encOutputs, int batchSize, IComputeGraph g)
         {
-            return m_attentionLayer.PreProcess(encoderOutput, batchSize, g);
+            return m_attentionLayer.PreProcess(encOutputs, batchSize, g);
         }
 
 
@@ -88,7 +88,7 @@ namespace Seq2SeqSharp
                 V = e;
             }
 
-            IWeightTensor eOutput = g.Dropout(V, batchSize, m_dropoutRatio, true);
+            IWeightTensor eOutput = g.Dropout(V, batchSize, m_dropoutRatio, false);
             eOutput = m_decoderFFLayer.Process(eOutput, batchSize, g);
 
             return eOutput;

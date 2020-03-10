@@ -216,7 +216,7 @@ namespace Seq2SeqSharp.Tools
                         line = srTgt.ReadLine().ToLower().Trim();
                         if (m_addBOSEOS)
                         {
-                            line = $"{line} {EOS}";
+                            line = $"{BOS} {line} {EOS}";
                         }
                         sntPair.TgtSnt = line.Split(' ');
 
@@ -278,16 +278,18 @@ namespace Seq2SeqSharp.Tools
         /// </summary>
         /// <param name="s"></param>
         /// <returns></returns>
-        public static List<int> PadSentences(List<List<string>> s)
+        public static List<int> PadSentences(List<List<string>> s, int maxLen = -1)
         {
             List<int> originalLengths = new List<int>();
 
-            int maxLen = -1;
-            foreach (List<string> item in s)
+            if (maxLen <= 0)
             {
-                if (item.Count > maxLen)
+                foreach (List<string> item in s)
                 {
-                    maxLen = item.Count;
+                    if (item.Count > maxLen)
+                    {
+                        maxLen = item.Count;
+                    }
                 }
             }
 
@@ -304,6 +306,26 @@ namespace Seq2SeqSharp.Tools
 
             return originalLengths;
         }
+
+
+        public static List<List<string>> LeftShiftSnts(List<List<string>> input, string lastTokenToPad)
+        {
+            List<List<string>> r = new List<List<string>>();
+
+            foreach (var seq in input)
+            {
+                List<string> rseq = new List<string>();
+
+                rseq.AddRange(seq);
+                rseq.RemoveAt(0);
+                rseq.Add(lastTokenToPad);
+
+                r.Add(rseq);
+            }
+
+            return r;
+        }
+
 
         /// <summary>
         /// Shuffle given sentence pairs and return the length of the longgest source sentence
