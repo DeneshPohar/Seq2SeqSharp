@@ -283,11 +283,12 @@ namespace Seq2SeqSharp.Tools
 
         public void Bind(IWeightTensor w)
         {
+            // No-op in .NET Core.
         }
 
         public void Unbind(IWeightTensor w)
         {
-
+            // No-op in .NET Core.
         }
 
         /// <summary>
