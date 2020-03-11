@@ -582,32 +582,6 @@ namespace Seq2SeqSharp
             return results;
         }
 
-        public void VisualizeNeuralNetwork(string visNNFilePath)
-        {
-            (IEncoder encoder, IDecoder decoder, IWeightTensor srcEmbedding, IWeightTensor tgtEmbedding) = GetNetworksOnDeviceAt(-1);
-            // Build input sentence
-            List<List<string>> inputSeqs = ParallelCorpus.ConstructInputTokens(null);
-            int batchSize = inputSeqs.Count;
-            IComputeGraph g = CreateComputGraph(m_defaultDeviceId, needBack: false, visNetwork: true);
-            AttentionDecoder rnnDecoder = decoder as AttentionDecoder;
-
-            encoder.Reset(g.GetWeightFactory(), batchSize);
-            rnnDecoder.Reset(g.GetWeightFactory(), batchSize);
-
-            // Run encoder
-            IWeightTensor encodedWeightMatrix = Encode(g, inputSeqs, encoder, srcEmbedding, null, null);
-
-            // Prepare for attention over encoder-decoder
-            AttentionPreProcessResult attPreProcessResult = rnnDecoder.PreProcess(encodedWeightMatrix, batchSize, g);
-
-            // Run decoder
-            IWeightTensor x = g.PeekRow(tgtEmbedding, (int)SENTTAGS.START);
-            IWeightTensor eOutput = rnnDecoder.Decode(x, attPreProcessResult, batchSize, g);
-            IWeightTensor probs = g.Softmax(eOutput);
-
-            g.VisualizeNeuralNetToFile(visNNFilePath);
-        }
-
         public void DumpVocabToFiles(string outputSrcVocab, string outputTgtVocab)
         {
             m_modelMetaData.Vocab.DumpSourceVocab(outputSrcVocab);
