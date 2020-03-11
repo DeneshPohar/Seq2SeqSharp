@@ -283,12 +283,10 @@ namespace Seq2SeqSharp.Tools
 
         public void Bind(IWeightTensor w)
         {
-            m_tensorsBindToCurrentGraph.Add(w);
         }
 
         public void Unbind(IWeightTensor w)
         {
-            m_tensorsBindToCurrentGraph.Remove(w);
 
         }
 
@@ -1273,15 +1271,6 @@ namespace Seq2SeqSharp.Tools
                     m_weightTensorFactory.Dispose();
                 }
             }
-            else
-            {
-                foreach (WeightTensor item in m_tensorsBindToCurrentGraph)
-                {
-                    item.ReleaseWeight();
-                }
-            }
-
-            m_tensorsBindToCurrentGraph.Clear();
         }
     }
 }
