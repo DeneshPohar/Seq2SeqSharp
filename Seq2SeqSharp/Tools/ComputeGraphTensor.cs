@@ -224,7 +224,7 @@ namespace Seq2SeqSharp.Tools
 
             Ops.AddMulV(res.TWeight, m1.TWeight, m2.TWeight, v);
 
-            if (m_needsBackprop && (runGradientW1 || runGradientW2))
+            if (m_needsBackprop)
             {
                 Action backward = () =>
                 {
@@ -238,6 +238,38 @@ namespace Seq2SeqSharp.Tools
                     if (runGradientW2)
                     {
                         Ops.AddMulV(m2.TGradient, m2.TGradient, res.TGradient, v);
+                    }
+
+                    res.Dispose();
+                };
+                m_backprop.Add(backward);
+            }
+
+            return res;
+        }
+
+
+
+        public IWeightTensor MaskFill(IWeightTensor w1, IWeightTensor m, float v)
+        {
+            WeightTensor m1 = w1 as WeightTensor;
+            WeightTensor mask = m as WeightTensor;
+
+            WeightTensor res = m_weightTensorFactory.CreateWeightTensor(m1.Sizes, m_deviceId, name: $"{GetHashString(w1.Name, m.Name)}.MaskFill", graphToBind: this);
+            VisualizeNodes(new IWeightTensor[] { w1, m }, res);
+
+
+            Ops.MaskFill(res.TWeight, m1.TWeight, mask.TWeight, v);
+
+            if (m_needsBackprop)
+            {
+                Action backward = () =>
+                {
+                    res.ReleaseWeight();
+
+                    using (var tGrad = Ops.MaskFill(null, res.TGradient, mask.TWeight, 0.0f))
+                    {
+                        m1.CopyOrAddGradient(tGrad);
                     }
 
                     res.Dispose();
@@ -578,7 +610,7 @@ namespace Seq2SeqSharp.Tools
                     res.ReleaseWeight();
                     using (Tensor gT = res.TGradient.Transpose())
                     {
-                        m.CopyOrAddGradient(gT);
+                        m.CopyOrAddGradient(gT, res.Name);
                     }
 
                     res.Dispose();
@@ -625,16 +657,19 @@ namespace Seq2SeqSharp.Tools
             VisualizeNodes(w, res);
 
             Ops.Softmax(res.TWeight, m.TWeight);
-            if (m_needsBackprop && runGradients)
+            if (m_needsBackprop)
             {
                 Action backward = () =>
                 {
-                    if (inPlace)
-                    {                        
-                        m.TGradient = res.TGradient.CopyRef();
+                    if (runGradients)
+                    {
+                        if (inPlace)
+                        {
+                            m.TGradient = res.TGradient.CopyRef();
+                        }
+                        m.AddSoftmaxGradient(res, inPlace);
                     }
 
-                    m.AddSoftmaxGradient(res, inPlace);
                     res.Dispose();
                 };
                 m_backprop.Add(backward);
@@ -652,7 +687,7 @@ namespace Seq2SeqSharp.Tools
 
             VisualizeNodes(w, res);
 
-            if (m_needsBackprop && runGradients)
+            if (m_needsBackprop)
             {
                 Action backward = () =>
                 {
@@ -715,7 +750,7 @@ namespace Seq2SeqSharp.Tools
                         {
                             using (Tensor resG_i = res.TGradient.Narrow(0, m.Rows * i, m.Rows))
                             {
-                                m.CopyOrAddGradient(resG_i);
+                                m.CopyOrAddGradient(resG_i, res.Name);
                             }
                         }
                     }
@@ -767,7 +802,7 @@ namespace Seq2SeqSharp.Tools
                         WeightTensor m = item as WeightTensor;
                         using (Tensor tTmp = res.TGradient.Narrow(0, sx, m.Rows))
                         {
-                            m.CopyOrAddGradient(tTmp);
+                            m.CopyOrAddGradient(tTmp, res.Name);
                             sx += m.Rows;
                         }
                     }
@@ -862,7 +897,7 @@ namespace Seq2SeqSharp.Tools
                         WeightTensor m = item as WeightTensor;
                         using (Tensor tTmp = res.TGradient.Narrow(1, sy, m.Columns))
                         {
-                            m.CopyOrAddGradient(tTmp);
+                            m.CopyOrAddGradient(tTmp, res.Name);
                             sy += m.Columns;
                         }
                     }
@@ -926,10 +961,7 @@ namespace Seq2SeqSharp.Tools
             WeightTensor res = m_weightTensorFactory.CreateWeightTensor(m.Sizes, m_deviceId, name: $"{GetHashString(w.Name)}.Permute", graphToBind: this);
             VisualizeNodes(w, res);
 
-            using (Tensor tWPremute = m.TWeight.Permute(dims))
-            {
-                res.TWeight = Ops.AsContiguous(tWPremute);
-            }
+            res.TWeight = m.TWeight.Permute(dims);
 
             if (m_needsBackprop)
             {
@@ -950,12 +982,12 @@ namespace Seq2SeqSharp.Tools
         }
 
 
-        public IWeightTensor View(IWeightTensor w, params long[] dims)
+        public IWeightTensor View(IWeightTensor w, bool runGradient = true, params long[] dims)
         {
             bool hasNegOne = false;
             int negOneIdx = 0;
             long totalGivenSize = 1;
-            for (int i = 0;i < dims.Length;i++)
+            for (int i = 0; i < dims.Length; i++)
             {
                 long dim = dims[i];
                 if (dim == -1)
@@ -991,20 +1023,24 @@ namespace Seq2SeqSharp.Tools
             //  VisualizeNodes(w, res);
 
 
-            using (Tensor congtiW = Ops.AsContiguous(m.TWeight))
-            {
-                res.TWeight = congtiW.View(dims);
-            }
+            Tensor congtiW = Ops.AsContiguous(m.TWeight);
+            m.ReleaseWeight();
+            m.TWeight = congtiW;
+
+            res.TWeight = congtiW.View(dims);
+
 
             if (m_needsBackprop)
             {
                 Action backward = () =>
                 {
-                    res.ReleaseWeight();
-
-                    using (Tensor resG = res.TGradient.View(m.Sizes))
+                    if (runGradient)
                     {
-                        m.CopyOrAddGradient(resG);
+                        res.ReleaseWeight();
+                        using (Tensor resG = res.TGradient.View(m.Sizes))
+                        {
+                            m.CopyOrAddGradient(resG, res.Name);
+                        }
                     }
                     res.Dispose();
                 };
@@ -1015,7 +1051,7 @@ namespace Seq2SeqSharp.Tools
         }
 
 
-        public IWeightTensor Expand(IWeightTensor w, params long[] dims)
+        public IWeightTensor Expand(IWeightTensor w, bool runGradient = true, params long[] dims)
         {
             
             WeightTensor m = w as WeightTensor;
@@ -1028,11 +1064,13 @@ namespace Seq2SeqSharp.Tools
             {
                 Action backward = () =>
                 {
-                    res.ReleaseWeight();
-
-                    using (var mGExp = m.TGradient.Expand(dims))
+                    if (runGradient)
                     {
-                        Ops.Add(mGExp, mGExp, res.TGradient);
+                        res.ReleaseWeight();
+                        using (var mGExp = m.TGradient.Expand(dims))
+                        {
+                            Ops.Add(mGExp, mGExp, res.TGradient);
+                        }
                     }
                     res.Dispose();
                 };
@@ -1042,6 +1080,7 @@ namespace Seq2SeqSharp.Tools
             return res;
         }
 
+      
         public (IWeightTensor r1, IWeightTensor r2) SplitColumns(IWeightTensor w, int size1, int size2)
         {
             List<IWeightTensor> res = SplitColumns2(w, size1, size2);
@@ -1074,7 +1113,7 @@ namespace Seq2SeqSharp.Tools
             }
         }
 
-        public IWeightTensor LayerNorm(IWeightTensor src, IWeightTensor alpha, IWeightTensor beta, float eps = 1e-09f)
+        public IWeightTensor LayerNorm(IWeightTensor src, IWeightTensor alpha, IWeightTensor beta, float eps = 1e-9f)
         {
             WeightTensor srcT = src as WeightTensor;
             WeightTensor alphaT = alpha as WeightTensor;
