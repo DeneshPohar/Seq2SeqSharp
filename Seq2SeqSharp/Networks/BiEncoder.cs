@@ -68,9 +68,11 @@ namespace Seq2SeqSharp
             }
         }
 
-        public IWeightTensor Encode(IWeightTensor rawInputs, int batchSize, IComputeGraph g)
+        public IWeightTensor Encode(IWeightTensor rawInputs, IWeightTensor selfMask, IWeightTensor dimMask, int batchSize, IComputeGraph g)
         {
             int seqLen = rawInputs.Rows / batchSize;
+
+            rawInputs = g.TransposeBatch(rawInputs, seqLen);
 
             List<IWeightTensor> inputs = new List<IWeightTensor>();
             for (int i = 0; i < seqLen; i++)
@@ -104,7 +106,9 @@ namespace Seq2SeqSharp
 
             }
 
-            return g.ConcatRows(layerOutputs);
+            var result = g.ConcatRows(layerOutputs);
+
+            return g.TransposeBatch(result, batchSize);
         }
 
 

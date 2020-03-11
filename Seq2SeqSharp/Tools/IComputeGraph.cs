@@ -20,8 +20,8 @@ namespace Seq2SeqSharp
         IWeightTensor EltMulMulAdd(IWeightTensor w1, IWeightTensor w2, IWeightTensor w3, IWeightTensor w4);
         IWeightTensor TransposeBatch(IWeightTensor m, int batchSize);
         IWeightTensor Permute(IWeightTensor w, params int[] dims);
-        IWeightTensor View(IWeightTensor w, params long[] dims);
-        IWeightTensor Expand(IWeightTensor w, params long[] dims);
+        IWeightTensor View(IWeightTensor w, bool runGradient = true, params long[] dims);
+        IWeightTensor Expand(IWeightTensor w, bool runGradient = true, params long[] dims);
         IWeightTensor AddTanh(IWeightTensor w1, IWeightTensor w2);
 
         IWeightTensor AddTanh(IWeightTensor w1, IWeightTensor w2, IWeightTensor w3);
@@ -46,6 +46,7 @@ namespace Seq2SeqSharp
 
         int[] Argmax(IWeightTensor w, int dim);
 
+        IWeightTensor MaskFill(IWeightTensor w1, IWeightTensor m, float v);
 
         void Bind(IWeightTensor w);
         void Unbind(IWeightTensor w);
